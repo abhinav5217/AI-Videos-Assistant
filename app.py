@@ -7,7 +7,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-
+from core.serpapi_transcript import get_youtube_transcript
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -299,14 +299,28 @@ if run_btn:
         def update_step(key: str, state: str) -> None:
             st.session_state.pipeline_steps[key] = state
 
+        
         try:
-            with st.status("Analysing your meeting…", expanded=True) as pipeline_status:
-                update_step("audio", "active")
+            with st.status(
+                "Analysing your meeting…",
+                expanded=True,
+            ) as pipeline_status:
+
+                transcript = ""
+
+                # Step 1: Handle uploaded audio/video files as before.
                 if input_mode == "Upload audio/video":
-                    pipeline_placeholder.info("Preparing the uploaded media…")
+                    update_step("audio", "active")
+                    pipeline_placeholder.info(
+                        "Preparing the uploaded media…"
+                    )
+
                     extension = Path(uploaded_file.name).suffix.lower()
                     if not extension:
-                        raise ValueError("The uploaded file must have a file extension.")
+                        raise ValueError(
+                            "The uploaded file must have a file extension."
+                        )
+
                     with tempfile.NamedTemporaryFile(
                         suffix=extension,
                         prefix="uploaded_media_",
@@ -314,19 +328,68 @@ if run_btn:
                     ) as temp_file:
                         temp_upload_path = temp_file.name
                         temp_file.write(uploaded_file.getbuffer())
+
                     chunks = process_input(temp_upload_path)
+                    update_step("audio", "done")
+
                 else:
-                    pipeline_placeholder.info("Downloading and preparing audio…")
-                    chunks = process_input(source.strip())
-                update_step("audio", "done")
+                    # Step 2: Try SerpApi before downloading YouTube audio.
+                    update_step("audio", "active")
+                    update_step("transcript", "active")
 
-                update_step("transcript", "active")
-                pipeline_placeholder.info("Transcribing audio…")
-                transcript = transcribe_all(chunks, language)
-                update_step("transcript", "done")
+                    pipeline_placeholder.info(
+                        "Trying to fetch the YouTube transcript…"
+                    )
+
+                    try:
+                        transcript = get_youtube_transcript(
+                            source.strip(),
+                            language=language,
+                        )
+
+                        update_step("audio", "done")
+                        update_step("transcript", "done")
+
+                        pipeline_placeholder.success(
+                            "Transcript fetched successfully."
+                        )
+
+                    except Exception as serpapi_error:
+                        # Step 3: Fall back to the existing audio pipeline.
+                        update_step("transcript", "error")
+                        update_step("audio", "active")
+
+                        pipeline_placeholder.warning(
+                            "Transcript API failed. Trying audio processing…"
+                        )
+
+                        try:
+                            chunks = process_input(source.strip())
+                            update_step("audio", "done")
+
+                        except Exception as audio_error:
+                            raise RuntimeError(
+                                "Transcript retrieval and audio processing "
+                                "both failed. "
+                                f"Transcript error: {serpapi_error}. "
+                                f"Audio error: {audio_error}"
+                            ) from audio_error
+
+                # Step 4: Transcribe audio only if no transcript was returned.
+                if not transcript.strip():
+                    update_step("transcript", "active")
+                    pipeline_placeholder.info("Transcribing audio…")
+
+                    transcript = transcribe_all(chunks, language)
+                    update_step("transcript", "done")
+
                 if not transcript or not transcript.strip():
-                    raise ValueError("No transcript was generated. Check the media file and selected language.")
+                    raise ValueError(
+                        "No transcript was generated. Check the media, "
+                        "API quota, and selected language."
+                    )
 
+                # Step 5: Keep the existing AI analysis pipeline.
                 update_step("title", "active")
                 title = generate_title(transcript)
                 update_step("title", "done")
@@ -344,7 +407,13 @@ if run_btn:
                 update_step("rag", "active")
                 rag_chain = build_rag_chain(transcript)
                 update_step("rag", "done")
-                pipeline_status.update(label="Analysis complete", state="complete", expanded=False)
+
+                pipeline_status.update(
+                    label="Analysis complete",
+                    state="complete",
+                    expanded=False,
+                )
+
 
             # Store the whole meeting under its own chat ID; creating a new chat
             # never overwrites the existing conversations dictionary.
