@@ -137,3 +137,47 @@ def process_input(source: str) -> list[str]:
                 os.remove(intermediate_path)
             except OSError:
                 pass
+
+
+
+def process_uploaded_file(uploaded_file) -> list[str]:
+    """Save an uploaded media file temporarily and create audio chunks."""
+    if uploaded_file is None:
+        raise ValueError("Please upload an audio or video file.")
+
+    # Allow common audio and video formats supported by FFmpeg.
+    allowed_extensions = {
+        ".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac",
+        ".mp4", ".mov", ".mkv", ".webm", ".mpeg", ".mpg"
+    }
+
+    # Get the original file extension.
+    extension = Path(uploaded_file.name).suffix.lower()
+
+    if extension not in allowed_extensions:
+        raise ValueError("Unsupported file format. Please upload a supported audio or video file.")
+
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+    # Store the uploaded file temporarily on the Render server.
+    temp_path = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            suffix=extension,
+            dir=DOWNLOAD_DIR,
+            delete=False
+        ) as temp_file:
+            temp_path = temp_file.name
+            temp_file.write(uploaded_file.getvalue())
+
+        # Reuse your existing conversion and chunking pipeline.
+        return process_input(temp_path)
+
+    finally:
+        # Remove the original uploaded file after processing.
+        if temp_path and os.path.isfile(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
